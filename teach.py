@@ -13,7 +13,7 @@ import json
 import time
 import threading
 import select
-from roarm_driver import RoArmDriver
+from playmotion_driver import RoArmDriver
 
 
 def main():

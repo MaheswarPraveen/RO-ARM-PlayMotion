@@ -1,79 +1,180 @@
 #!/usr/bin/env python3
-import json
-import time
+"""
+play.py — Path Playback & Management for RoArm M2-S
+Enhanced version with:
+1. Interactive Menu (Play/Delete)
+2. Global Motor Speed override
+3. Zero-delay looping
+"""
+
 import sys
-import argparse
-from roarm_driver import RoArmDriver
+import os
+import time
+import json
+import glob
+import math
+from playmotion_driver import RoArmDriver
 
-def play_path(arm, waypoints):
-    """Executes a single run of the recorded waypoints."""
-    for idx, pos in enumerate(waypoints):
-        # Extract values safely
-        x = pos.get('x', 0)
-        y = pos.get('y', 0)
-        z = pos.get('z', 0)
-        t = pos.get('t', 3.14)
-        spd = pos.get('spd', 0.25)
-        
-        print(f"  -> Moving to WP {idx+1}/{len(waypoints)}: X:{x:.1f} Y:{y:.1f} Z:{z:.1f}")
-        arm.move_xyz(x, y, z, t, speed=spd)
-        # The driver handles the safety delay internally
+# ─────────────────────────────────────────────────────────
+# CONFIGURATION
+# ─────────────────────────────────────────────────────────
+PORT = '/dev/ttyUSB0'
+BAUD = 115200
+RECORDINGS_DIR = '/home/rover/rover/ro-arm-playmotion'
 
-def main():
-    parser = argparse.ArgumentParser(description="Ro-Arm PlayMotion: Playback a recorded JSON path.")
-    parser.add_argument('filename', nargs='?', default="motion_path.json", help="Path to the JSON file (default: motion_path.json)")
-    parser.add_argument('-l', '--loop', action='store_true', help="Play the path continuously in a loop")
-    args = parser.parse_args()
-        
+def list_recordings():
+    pattern = os.path.join(RECORDINGS_DIR, "*.json")
+    files = glob.glob(pattern)
+    return sorted(files)
+
+def delete_recording(filename):
     try:
-        with open(args.filename, "r") as f:
+        os.remove(filename)
+        print(f"\n[DELETED] {os.path.basename(filename)} has been removed.")
+    except Exception as e:
+        print(f"\n[ERROR] Could not delete file: {e}")
+
+def play_recording(driver, filename, loop=False, motor_speed=0):
+    try:
+        with open(filename, 'r') as f:
             waypoints = json.load(f)
-    except FileNotFoundError:
-        print(f"\n[!] Error: {args.filename} not found.")
-        print("Please run teach.py first to record a path.")
-        sys.exit(1)
+    except Exception as e:
+        print(f"Error reading {filename}: {e}"); return
 
     if not waypoints:
-        print("\n[!] Error: No waypoints found in file.")
-        sys.exit(1)
+        print("No waypoints found in file."); return
 
-    print("Connecting to RoArm M2-S...")
-    arm = RoArmDriver(port='/dev/ttyUSB0')
-    try:
-        arm.connect()
-    except Exception:
-        print("\n[!] Failed to connect to arm on /dev/ttyUSB0.")
-        sys.exit(1)
+    driver.enable_torque()
+    print(f"\n🚀 Executing {os.path.basename(filename)} ({len(waypoints)} points)...")
+    print(f"   Motor Speed: {'MAX' if motor_speed == 0 else f'{motor_speed}°/s'}")
+    print("   (Press Ctrl+C to stop)")
 
-    print("Enabling torque for Playback Mode...")
-    arm.enable_torque()
-    
-    print("\n" + "="*40)
-    print(" 🤖 Ro-Arm PlayMotion : PLAY MODE")
-    print("="*40)
-    print(f" Loaded {len(waypoints)} waypoints from {args.filename}")
-    print(f" Mode: {'CONTINUOUS LOOP' if args.loop else 'SINGLE RUN (ONCE)'}")
-    print(" Press Ctrl+C to stop at any time.")
-    print("="*40 + "\n")
-    
+    cycle = 1
     try:
-        if args.loop:
-            cycle = 1
-            while True:
-                print(f"\n--- Starting Loop {cycle} ---")
-                play_path(arm, waypoints)
-                cycle += 1
-                time.sleep(1.0) # Brief pause before restarting loop
-        else:
-            play_path(arm, waypoints)
-            print("\n✅ Playback complete.")
+        while True:
+            if loop:
+                print(f"\n--- PLAYING LOOP {cycle} ---")
             
+            for i, pos in enumerate(waypoints):
+                # Use raw joint angles if they exist, else try XYZ
+                if "b" in pos:
+                    # Joint mode
+                    cmd = {
+                        "T": 122,
+                        "b": math.degrees(pos["b"]) if isinstance(pos["b"], (float, int)) else pos["b"],
+                        "s": math.degrees(pos["s"]) if isinstance(pos["s"], (float, int)) else pos["s"],
+                        "e": math.degrees(pos["e"]) if isinstance(pos["e"], (float, int)) else pos["e"],
+                        "h": math.degrees(pos["h"]) if isinstance(pos["h"], (float, int)) else pos["h"],
+                        "spd": motor_speed,
+                        "acc": 0
+                    }
+                else:
+                    # Cartesian mode
+                    cmd = {
+                        "T": 104,
+                        "x": pos["x"],
+                        "y": pos["y"],
+                        "z": pos["z"],
+                        "t": pos.get("t", 3.14),
+                        "spd": motor_speed if motor_speed > 0 else 0.25 # spd in T:104 is a scale factor
+                    }
+
+                driver._send_command(cmd, wait_time=0.05)
+                
+                # Feedback loop to wait for arrival
+                reached = False
+                timeout = time.time() + 5.0
+                while not reached and time.time() < timeout:
+                    curr = driver.get_xyz()
+                    if curr:
+                        # Check tolerance
+                        if "b" in pos:
+                            # Simple angle check
+                            if (abs(math.degrees(curr["b"]) - math.degrees(pos["b"])) < 2.0 and
+                                abs(math.degrees(curr["s"]) - math.degrees(pos["s"])) < 2.0):
+                                reached = True
+                        else:
+                            # XYZ distance check
+                            dist = math.sqrt((curr["x"]-pos["x"])**2 + (curr["y"]-pos["y"])**2 + (curr["z"]-pos["z"])**2)
+                            if dist < 10.0: reached = True
+                    time.sleep(0.05)
+
+            if not loop: break
+            cycle += 1
+            # Zero delay loop restart as requested
     except KeyboardInterrupt:
-        print("\n\n🛑 Playback interrupted by user.")
-    finally:
-        print("\nRe-enabling torque to lock position and disconnecting...")
-        arm.enable_torque()
-        arm.disconnect()
+        print("\n\n🛑 Playback stopped by user.")
+
+def main():
+    print("=" * 50)
+    print("  🤖 RO-ARM PLAYMOTION : ENHANCED PLAYBACK")
+    print("=" * 50)
+
+    # 1. Connect
+    driver = RoArmDriver(port=PORT, baudrate=BAUD)
+    try:
+        driver.connect()
+    except:
+        print(f"[!] Could not connect to arm on {PORT}. Check permissions."); return
+
+    while True:
+        # 2. List files
+        files = list_recordings()
+        print("\nAVAILABLE RECORDINGS:")
+        if not files:
+            print("  (No .json recordings found)")
+        else:
+            for i, f in enumerate(files):
+                print(f"  [{i+1}] {os.path.basename(f)}")
+
+        # 3. User choice
+        prompt = "\nSelect file number to play, 'd<num>' to delete (e.g. d1), or 0 to exit: "
+        choice = input(prompt).strip().lower()
+
+        if choice == '0' or not choice:
+            break
+        
+        if choice.startswith('d'):
+            try:
+                idx = int(choice[1:]) - 1
+                if 0 <= idx < len(files):
+                    confirm = input(f"Are you sure you want to delete {os.path.basename(files[idx])}? (y/n): ")
+                    if confirm.lower() == 'y':
+                        delete_recording(files[idx])
+                else:
+                    print("Invalid index.")
+            except:
+                print("Invalid format. Use 'd1' to delete.")
+            continue
+
+        try:
+            idx = int(choice) - 1
+            if not (0 <= idx < len(files)):
+                print("Invalid selection.")
+                continue
+            
+            target_file = files[idx]
+            
+            # 4. Speed & Loop Options
+            print("\nMOTOR SPEED SETTINGS:")
+            print("  0   = MAX Speed (Servos spin as fast as possible)")
+            print("  10  = Very Slow")
+            print("  100 = Fast")
+            speed_input = input("Enter motor speed [default: 0]: ").strip()
+            motor_speed = int(speed_input) if speed_input else 0
+            
+            loop = input("Play continuously in a loop? (y/n) [default: n]: ").lower() == 'y'
+            
+            # 5. Play!
+            play_recording(driver, target_file, loop, motor_speed)
+            
+        except ValueError:
+            print("Please enter a number or 'd<num>'.")
+        except Exception as e:
+            print(f"An error occurred: {e}")
+
+    driver.disconnect()
+    print("\nGoodbye.")
 
 if __name__ == "__main__":
     main()

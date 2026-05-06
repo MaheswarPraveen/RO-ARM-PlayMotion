@@ -1,76 +1,64 @@
-# Ro-Arm PlayMotion
+# RoArm M2-S Play Motion
 
-A robust, plug-and-play toolkit for teaching and replaying physical movements on the **WaveShare RoArm M2-S**.
+A high-precision path recording and playback system for the **Waveshare RoArm M2-S** robotic arm. Built on top of the Waveshare ESP32 JSON API, this project adds a robust, high-level control layer that allows you to teach the arm complex movements and replay them with millisecond precision, completely bypassing the need for complex ROS2 middleware.
 
-This package solves the common serial communication issues (buffer corruption, missed commands) often seen when controlling the RoArm M2-S via Python. It provides a reliable object-oriented driver and two easy-to-use CLI tools for recording and playing back robotic arm trajectories.
+## 🛠️ Credits & Technology
 
-## 🌟 Features
-- **Bulletproof Serial Driver:** Aggressively handles serial buffer flushing and parsing to prevent the ESP32 from crashing.
-- **Teach Mode (`teach.py`):** Interactive terminal script that disables servo torque, letting you guide the arm by hand and record waypoints with a single keystroke.
-- **Play Mode (`play.py`):** Autonomous playback of recorded JSON files, supporting both single-run and continuous loop modes.
+This project is a hybrid implementation that combines official Waveshare technology with our custom autonomous logic:
 
-## 🛠️ Hardware Requirements
-- WaveShare RoArm M2-S
-- A Linux host (e.g., Raspberry Pi, PC)
-- USB-C cable connecting the host to the RoArm's ESP32 port.
+- **Waveshare (Hardware & Base API)**: We utilize the official **RoArm M2-S** hardware, the underlying ESP32 firmware, and the core JSON-based command structure provided by Waveshare.
+- **Our Custom Implementation (Play Motion)**: We have developed the **Playmotion Driver**, which implements critical features not found in the base examples:
+    - **Noise Filtering**: Automatically strips out asynchronous servo error messages and boot-spam to prevent serial buffer corruption.
+    - **Dual-Mode Teaching**: Created the physical "freedrive" (gravity-off) and keyboard "jogging" interfaces from scratch.
+    - **Feedback Sync**: Implemented the coordinate polling logic to ensure 100% movement accuracy during autonomous playback.
 
-## 📦 Installation
+---
 
-1. Clone or download this repository.
-2. Install the required Python dependencies:
-   ```bash
-   pip3 install -r requirements.txt
-   ```
-3. Make the scripts executable:
-   ```bash
-   chmod +x teach.py play.py
-   ```
+## 🦾 The Two Teach Modes
 
-*Note: Ensure your user has permissions to access serial ports (e.g., `sudo usermod -a -G dialout $USER` on Ubuntu/Debian).*
+The unified `teach.py` script provides two distinct ways to program the robotic arm:
 
-## 📖 Usage
+### 1. Physical Teach Mode (Freedrive)
+In this mode, the script **disables torque** on all servos, making the arm "limp." 
+- **Usage**: You physically guide the arm with your hand through the desired path.
+- **Recording**: Press **[R]** on your keyboard to save the current coordinates as a waypoint.
+- **Benefit**: Extremely intuitive for complex, organic motions.
 
-### 1. Teach the Arm (`teach.py`)
-Run the teach script to record a new path. The arm will go limp, allowing you to move it physically.
+### 2. Keyboard Teach Mode (Jogging)
+In this mode, the arm remains **under torque** and holds its position.
+- **Usage**: Use the keyboard to "jog" the arm along its axes for fine-tuning.
+    - **W/S**: Shoulder Up/Down | **A/D**: Base Left/Right
+    - **I/K**: Elbow Forward/Back | **J/L**: Hand Pitch
+- **Benefit**: Maximum precision for fine-tuning positions or working in tight spaces.
 
+---
+
+## 📂 Project Structure
+
+- **`teach.py`**: Unified programming utility (Physical + Keyboard).
+- **`play.py`**: Enhanced playback engine with speed override and instant looping.
+- **`playmotion_driver.py`**: The robust core driver for reliable serial communication.
+- **`motion_path.json`**: Example movement data format.
+
+---
+
+## 🛠️ Usage Guide
+
+### 1. Connection
+Ensure your RoArm M2-S is connected via USB (usually `/dev/ttyUSB0`).
+
+### 2. Teaching a Path
 ```bash
-./teach.py
+python3 teach.py
 ```
-**Controls:**
-- **`r`** : Record the current XYZ position of the arm.
-- **`s`** : Save the recorded path to `motion_path.json` and exit.
-- **`q`** : Quit without saving.
+- Select mode `1` (Physical) or `2` (Keyboard).
+- Press **[R]** to record points, **[F]** to save.
 
-### 2. Playback the Path (`play.py`)
-Run the playback script to watch the arm recreate your movements.
-
-**Play Once:**
+### 3. Playing Back a Path
 ```bash
-./play.py
+python3 play.py
 ```
-
-**Play Continuously (Loop Mode):**
-```bash
-./play.py --loop
-```
-*(You can also use `-l` instead of `--loop`)*
-
-**Use a Specific File:**
-```bash
-./play.py my_custom_path.json
-```
-
-## 🔌 Integrating into Your Projects
-You can easily import the `RoArmDriver` into your own Python projects for reliable control:
-
-```python
-from roarm_driver import RoArmDriver
-
-arm = RoArmDriver(port='/dev/ttyUSB0')
-arm.connect()
-
-# Move to a specific XYZ position
-arm.move_xyz(x=200, y=0, z=150)
-
-arm.disconnect()
-```
+- Select the recording number.
+- Set the **Motor Speed** (0 for max speed).
+- Toggle **Looping** for continuous execution.
+- Use **`d<num>`** to delete unwanted recordings (e.g., `d1`).
