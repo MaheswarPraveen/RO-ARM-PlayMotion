@@ -1,4 +1,4 @@
-![PlayMotion Logo](logo.png)
+![PlayMotion Logo](logo.jpg)
 
 # RoArm M2-S Play Motion
 
