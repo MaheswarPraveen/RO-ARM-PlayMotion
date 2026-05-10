@@ -2,7 +2,7 @@
 
 # RoArm M2-S Play Motion
 
-A high-precision path recording and playback system for the **Waveshare RoArm M2-S** robotic arm. Built on top of the Waveshare ESP32 JSON API, this project adds a robust, high-level control layer that allows you to teach the arm complex movements and replay them with precision.
+A path recording and playback system for the **Waveshare RoArm M2-S** robotic arm. Built on top of the Waveshare ESP32 JSON API, this project adds a robust, high-level control layer that allows you to teach the arm complex movements and replay them with precision.
 
 ## 🛠️ Credits & Technology
 
