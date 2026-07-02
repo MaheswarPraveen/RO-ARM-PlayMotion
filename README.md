@@ -9,10 +9,11 @@ A path recording and playback system for the **Waveshare RoArm M2-S** robotic ar
 This project is a hybrid implementation that combines official Waveshare technology with our custom autonomous logic:
 
 - **Waveshare (Hardware and Base API)**: We utilize the official **RoArm M2-S** hardware, the underlying ESP32 firmware, and the core JSON-based command structure provided by Waveshare.
-- **Our Custom Implementation (Play Motion)**: We have developed the **Playmotion Driver**, which implements critical features not found in the base examples:
+- **Our Custom Implementation (Play Motion)**: We have developed the **Playmotion Driver** and advanced control loops, implementing critical features not found in the base examples:
     - **Noise Filtering**: Automatically strips out asynchronous servo error messages and boot-spam to prevent serial buffer corruption.
     - **Dual-Mode Teaching**: Created the physical "freedrive" (gravity-off) and keyboard "jogging" interfaces from scratch.
-    - **Feedback Sync**: Implemented the coordinate polling logic to ensure 100% movement accuracy during autonomous playback.
+    - **Quintic Trajectory Interpolation**: Streams target angles continuously at 25Hz using a 5th-degree polynomial profile. This ensures joint velocity and acceleration ramp up and down smoothly for zero-jerk, fluid playback transitions.
+    - **Feedforward Gravity Compensation**: Dynamically calculates gravitational torque on the joints in real-time to inject offset corrections. This combats gravity sag during playback with zero serial communication overhead, preventing micro-stutters.
 
 ---
 
