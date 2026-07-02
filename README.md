@@ -4,11 +4,11 @@
 
 A path recording and playback system for the **Waveshare RoArm M2-S** robotic arm. Built on top of the Waveshare ESP32 JSON API, this project adds a robust, high-level control layer that allows you to teach the arm complex movements and replay them with precision.
 
-## 🛠️ Credits & Technology
+## Credits and Technology
 
 This project is a hybrid implementation that combines official Waveshare technology with our custom autonomous logic:
 
-- **Waveshare (Hardware & Base API)**: We utilize the official **RoArm M2-S** hardware, the underlying ESP32 firmware, and the core JSON-based command structure provided by Waveshare.
+- **Waveshare (Hardware and Base API)**: We utilize the official **RoArm M2-S** hardware, the underlying ESP32 firmware, and the core JSON-based command structure provided by Waveshare.
 - **Our Custom Implementation (Play Motion)**: We have developed the **Playmotion Driver**, which implements critical features not found in the base examples:
     - **Noise Filtering**: Automatically strips out asynchronous servo error messages and boot-spam to prevent serial buffer corruption.
     - **Dual-Mode Teaching**: Created the physical "freedrive" (gravity-off) and keyboard "jogging" interfaces from scratch.
@@ -16,7 +16,7 @@ This project is a hybrid implementation that combines official Waveshare technol
 
 ---
 
-## 🦾 The Two Teach Modes
+## The Two Teach Modes
 
 The unified `teach.py` script provides two distinct ways to program the robotic arm:
 
@@ -35,7 +35,7 @@ In this mode, the arm remains **under torque** and holds its position.
 
 ---
 
-## 📂 Project Structure
+## Project Structure
 
 - **`teach.py`**: Unified programming utility (Physical + Keyboard).
 - **`play.py`**: Enhanced playback engine with speed override and instant looping.
@@ -44,7 +44,7 @@ In this mode, the arm remains **under torque** and holds its position.
 
 ---
 
-## 🛠️ Usage Guide
+## Usage Guide
 
 ### 1. Connection
 Ensure your RoArm M2-S is connected via USB (usually `/dev/ttyUSB0`).
