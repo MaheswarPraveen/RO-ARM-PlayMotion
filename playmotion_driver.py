@@ -83,6 +83,18 @@ class RoArmDriver:
 
         return results
 
+    def send_fast(self, cmd_dict):
+        """
+        Lean fire-and-forget write for high-frequency streaming loops
+        (teach.py jog/gravity-comp, play.py trajectory streaming).
+        No drain, no read-back, no sleep — caller controls timing.
+        """
+        if not self.ser or not self.ser.is_open:
+            return
+        payload = json.dumps(cmd_dict) + '\n'
+        self.ser.write(payload.encode('ascii'))
+        self.ser.flush()
+
     def _send_command(self, cmd_dict, wait_time=0.5):
         """Send a command, don't care about response."""
         if not self.ser or not self.ser.is_open:

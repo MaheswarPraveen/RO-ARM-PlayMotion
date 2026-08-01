@@ -45,13 +45,11 @@ def delete_recording(filename):
         print(f"\n[ERROR] Could not delete file: {e}")
 
 def send_raw_cmd(driver, cmd_dict):
-    """Directly writes command to serial port and clears the RX buffer to prevent congestion."""
-    if not driver.ser or not driver.ser.is_open:
-        return
-    payload = json.dumps(cmd_dict) + '\n'
-    driver.ser.write(payload.encode('ascii'))
-    driver.ser.flush()
-    driver.ser.reset_input_buffer()
+    """Directly writes command to serial port. No per-step buffer reset —
+    that syscall was adding variable latency inside the 25Hz timing loop
+    on some platforms (e.g. Pi5), causing jitter. RX is drained once
+    before playback starts instead (see play_recording)."""
+    driver.send_fast(cmd_dict)
 
 def normalize_waypoint(pos):
     """Detects format and returns joint angles normalized to degrees."""
@@ -192,6 +190,7 @@ def play_recording(driver, filename, loop=False, speed_deg_s=30.0):
         print("No valid joint waypoints found in file."); return
 
     driver.enable_torque()
+    driver._drain()  # single buffer clear before streaming starts, not per-step
     print(f"\n🚀 Executing {os.path.basename(filename)} ({len(waypoints)} points)...")
     print(f"   Trajectory Speed: {speed_deg_s}°/s")
     print("   Gravity Compensation: Active (Feedforward)")

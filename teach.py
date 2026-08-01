@@ -67,7 +67,7 @@ def get_feedforward_offsets(angles):
         "h": 0.0
     }
 
-def move_arm_to_angles(arm, angles, speed=0, acc=20):
+def move_arm_to_angles(arm, angles, speed=0, acc=0):
     """Helper to send joint angle command using driver's serial connection with smooth ramping."""
     cmd = {
         "T": 122,
@@ -78,7 +78,7 @@ def move_arm_to_angles(arm, angles, speed=0, acc=20):
         "spd": speed,
         "acc": acc
     }
-    arm._send_command(cmd, wait_time=0.05)
+    arm.send_fast(cmd)
 
 def run_physical_teach(arm):
     print("\n--- PHYSICAL TEACH MODE (Freedrive) ---")
@@ -182,6 +182,7 @@ def run_keyboard_teach(arm):
     print("  Shoulder : [W]/[S]")
     print("  Elbow    : [I]/[K]")
     print("  Hand     : [J]/[L]")
+    print("  Step size: [Z] decrease / [X] increase")
     print("  ")
     print("  [R] Record | [F] Finish & Save | [Q] Quit without saving")
     print("=" * 50 + "\n")
@@ -190,10 +191,31 @@ def run_keyboard_teach(arm):
     old_settings = termios.tcgetattr(fd)
     should_save = False
 
-    last_comp_time = time.time()
     last_jog_time = 0.0      # Timestamp of last user movement input
     last_move_key = None     # Track last pressed jog key to detect direction changes
-    
+
+    # ── Background feedback poller ──
+    # get_live_angles() does a blocking serial round-trip (up to ~0.5s worst
+    # case). Running it inline in this 20Hz loop was the cause of the stutter
+    # on Pi5 — every ~200ms the loop would stall waiting on the read. Moved to
+    # its own thread (same pattern run_physical_teach already uses); the main
+    # loop below now only ever reads the latest cached value, never blocks.
+    feedback_lock = threading.Lock()
+    feedback_state = {"actual": None}
+    poller_running = True
+
+    def feedback_poller():
+        while poller_running:
+            if time.time() - last_jog_time > 0.5:
+                actual = get_live_angles(arm)
+                if actual:
+                    with feedback_lock:
+                        feedback_state["actual"] = actual
+            time.sleep(0.2)
+
+    poller_thread = threading.Thread(target=feedback_poller, daemon=True)
+    poller_thread.start()
+
     try:
         tty.setcbreak(fd)
         while running:
@@ -218,17 +240,29 @@ def run_keyboard_teach(arm):
                             pass
                     last_move_key = char
 
+                # Apply each axis's jog step at most ONCE per tick, even if the
+                # terminal buffered multiple repeats of the same key this cycle
+                # (this was silently multiplying jog speed beyond step_size).
+                axis_delta = {"b": 0.0, "s": 0.0, "e": 0.0, "h": 0.0}
                 for c in keys:
                     if c == 'q':
                         running = False
-                    elif c == 'a': desired["b"] += step_size; moved = True
-                    elif c == 'd': desired["b"] -= step_size; moved = True
-                    elif c == 'w': desired["s"] += step_size; moved = True
-                    elif c == 's': desired["s"] -= step_size; moved = True
-                    elif c == 'i': desired["e"] -= step_size; moved = True
-                    elif c == 'k': desired["e"] += step_size; moved = True
-                    elif c == 'j': desired["h"] -= step_size; moved = True
-                    elif c == 'l': desired["h"] += step_size; moved = True
+                    elif c == 'a': axis_delta["b"] = step_size; moved = True
+                    elif c == 'd': axis_delta["b"] = -step_size; moved = True
+                    elif c == 'w': axis_delta["s"] = step_size; moved = True
+                    elif c == 's': axis_delta["s"] = -step_size; moved = True
+                    elif c == 'i': axis_delta["e"] = -step_size; moved = True
+                    elif c == 'k': axis_delta["e"] = step_size; moved = True
+                    elif c == 'z':
+                        step_size = max(0.1, round(step_size - 0.5, 1))
+                        sys.stdout.write(f"\r\n  ⬇️  Jog step size: {step_size:.1f}°\n")
+                        sys.stdout.flush()
+                    elif c == 'x':
+                        step_size = min(15.0, round(step_size + 0.5, 1))
+                        sys.stdout.write(f"\r\n  ⬆️  Jog step size: {step_size:.1f}°\n")
+                        sys.stdout.flush()
+                    elif c == 'j': axis_delta["h"] = -step_size; moved = True
+                    elif c == 'l': axis_delta["h"] = step_size; moved = True
                     elif c == 'r':
                         waypoints.append(desired.copy())
                         sys.stdout.write(f"\r\n  ✅ Recorded WP {len(waypoints)}: Base:{desired['b']:.1f} Shoulder:{desired['s']:.1f} Elbow:{desired['e']:.1f}\n")
@@ -237,6 +271,9 @@ def run_keyboard_teach(arm):
                         should_save = True
                         running = False
                         break
+
+                for key in ["b", "s", "e", "h"]:
+                    desired[key] += axis_delta[key]
 
                 if moved:
                     last_jog_time = time.time()
@@ -250,42 +287,40 @@ def run_keyboard_teach(arm):
                         target_feedback_offset[k] = 0.0
 
             # ── 2. Active Feedback Error Calculation ──
-            # Query physical position at 5Hz (every 200ms) to measure remaining error
+            # Reads the latest position sampled by the background poller —
+            # never blocks the main loop (that was the stutter source).
             now = time.time()
-            if now - last_comp_time >= 0.2:
-                last_comp_time = now
-                
-                # Only check physical error if we aren't actively jogging (idle > 0.5s)
-                if now - last_jog_time > 0.5:
-                    actual = get_live_angles(arm)
-                    
-                    if actual and last_actual:
-                        # Glitch Filtering
-                        glitch = False
-                        for key in ["b", "s", "e", "h"]:
-                            if abs(actual[key] - last_actual[key]) > 15.0:
-                                glitch = True
-                                break
-                        
-                        if not glitch:
-                            last_actual = dict(actual)
-                            
-                            # Calculate errors (desired - actual)
-                            err_b = desired["b"] - actual["b"]
-                            err_s = desired["s"] - actual["s"]
-                            err_e = desired["e"] - actual["e"]
-                            err_h = desired["h"] - actual["h"]
-                            
-                            # Proportional feedback correction gain (kp=0.5) for high precision
-                            kp = 0.5
-                            target_feedback_offset["b"] = max(-10.0, min(10.0, err_b * kp))
-                            target_feedback_offset["s"] = max(-10.0, min(10.0, err_s * kp))
-                            target_feedback_offset["e"] = max(-10.0, min(10.0, err_e * kp))
-                            target_feedback_offset["h"] = max(-10.0, min(10.0, err_h * kp))
-                else:
-                    # While jogging, feedback offset decays back to 0
-                    for k in target_feedback_offset:
-                        target_feedback_offset[k] = 0.0
+            if now - last_jog_time > 0.5:
+                with feedback_lock:
+                    actual = feedback_state["actual"]
+
+                if actual and last_actual:
+                    # Glitch Filtering
+                    glitch = False
+                    for key in ["b", "s", "e", "h"]:
+                        if abs(actual[key] - last_actual[key]) > 15.0:
+                            glitch = True
+                            break
+
+                    if not glitch:
+                        last_actual = dict(actual)
+
+                        # Calculate errors (desired - actual)
+                        err_b = desired["b"] - actual["b"]
+                        err_s = desired["s"] - actual["s"]
+                        err_e = desired["e"] - actual["e"]
+                        err_h = desired["h"] - actual["h"]
+
+                        # Proportional feedback correction gain (kp=0.5) for high precision
+                        kp = 0.5
+                        target_feedback_offset["b"] = max(-10.0, min(10.0, err_b * kp))
+                        target_feedback_offset["s"] = max(-10.0, min(10.0, err_s * kp))
+                        target_feedback_offset["e"] = max(-10.0, min(10.0, err_e * kp))
+                        target_feedback_offset["h"] = max(-10.0, min(10.0, err_h * kp))
+            else:
+                # While jogging, feedback offset decays back to 0
+                for k in target_feedback_offset:
+                    target_feedback_offset[k] = 0.0
 
             # ── 3. Smooth Blending & Combined Control Output (20Hz) ──
             # 3a. Interpolate active feedback offset towards target (25% step size)
@@ -304,10 +339,10 @@ def run_keyboard_teach(arm):
             }
             
             # Stream control command
-            move_arm_to_angles(arm, compensated, speed=0, acc=15)
+            move_arm_to_angles(arm, compensated, speed=0, acc=0)
             
             # Display target position status
-            status = f"  LIVE | Base:{desired['b']:>5.1f} Shoulder:{desired['s']:>5.1f} Elbow:{desired['e']:>5.1f} Hand:{desired['h']:>5.1f}  | WPs: {len(waypoints)}"
+            status = f"  LIVE | Base:{desired['b']:>5.1f} Shoulder:{desired['s']:>5.1f} Elbow:{desired['e']:>5.1f} Hand:{desired['h']:>5.1f} | Step:{step_size:>4.1f}° | WPs: {len(waypoints)}"
             sys.stdout.write(f"\r{status}    ")
             sys.stdout.flush()
 
@@ -318,6 +353,8 @@ def run_keyboard_teach(arm):
     except KeyboardInterrupt:
         running = False
     finally:
+        poller_running = False
+        poller_thread.join(timeout=1.0)
         termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
         print("\nLocking arm position...")
         arm.enable_torque()
