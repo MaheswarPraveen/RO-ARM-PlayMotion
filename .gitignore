@@ -1,3 +1,8 @@
 .offgit/
 logs/
 *.log
+.env
+.env.*
+*.env
+__pycache__/
+*.pyc
